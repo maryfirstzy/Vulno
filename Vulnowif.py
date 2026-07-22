@@ -24,7 +24,7 @@ def base58_encode(b: bytes) -> str:
     for byte in b:
         if byte == 0: pad += 1
         else: break
-    return (chr(BASE58_ALPHABET[0]) * pad) + res.decode('ascii')[::-1]
+    return (chr(49) * pad) + res.decode('ascii')[::-1]
 
 def base58_check_encode(version: int, payload: bytes) -> str:
     version_byte = bytes([version])
@@ -102,39 +102,30 @@ def recover_private_key(sig1, sig2, n=SECP256K1_N):
         return None, None
 
 # ==========================================
-# NEW MODULE: Blockchain Live Status Checker
+# Blockchain Live Status Checker
 # ==========================================
 
 def query_blockchain_info(address: str):
-    """
-    Queries blockchain.info api natively to fetch the balance 
-    and historical transaction volumes of a legacy P2PKH address.
-    """
     url = f"https://blockchain.info{address}"
     req = urllib.request.Request(
         url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        headers={'User-Agent': 'Mozilla/5.0'}
     )
     try:
-        # Give the API a brief breathing window to mitigate rate-limiting
         time.sleep(0.5) 
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
-            
-            # Extract basic metric primitives
             balance_satoshis = data.get("final_balance", 0)
             balance_btc = balance_satoshis / 100000000.0
             total_txs = data.get("n_tx", 0)
             received_satoshis = data.get("total_received", 0)
             received_btc = received_satoshis / 100000000.0
-            
             return {
                 "active_balance": f"{balance_btc:.8f} BTC",
                 "tx_count": total_txs,
                 "total_received": f"{received_btc:.8f} BTC"
             }
-    except Exception as e:
-        # Graceful error capture if terminal drops internet connectivity
+    except Exception:
         return {
             "active_balance": "Lookup Failed (Offline/Rate Limited)",
             "tx_count": "Unknown",
@@ -200,7 +191,6 @@ if __name__ == "__main__":
                                 keys_recovered += 1
                                 print(f"[*] Processing Recovery Entry #{keys_recovered}...")
                                 
-                                # Process targets
                                 wif_c = private_key_to_wif(raw_pk, compressed=True)
                                 addr_c = public_key_to_address(get_public_key(raw_pk, compressed=True))
                                 stats_c = query_blockchain_info(addr_c)
@@ -209,7 +199,6 @@ if __name__ == "__main__":
                                 addr_u = public_key_to_address(get_public_key(raw_pk, compressed=False))
                                 stats_u = query_blockchain_info(addr_u)
                                 
-                                # Format visual logs with the new balance insights
                                 log_entry = (
                                     f"--- CRACKED KEY ENTRY #{keys_recovered} ---\n"
                                     f"Source Line Pair      : Line {sig1['id']} & Line {sig2['id']}\n"
@@ -235,3 +224,6 @@ if __name__ == "__main__":
                                 skipped_anomalies += 1
                                 
     if keys_recovered > 0:
+        print(f"\n[+] Processing complete. {keys_recovered} keys checked and written to '{output_file}'.")
+    else:
+        print(f"\n[-] Processing complete. 0 keys recovered.")
