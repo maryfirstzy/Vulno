@@ -31,11 +31,9 @@ def base58_check_encode(version: int, payload: bytes) -> str:
     return base58_encode(full_payload + checksum)
 
 def private_key_to_wif(private_key_int: int, compressed: bool = True) -> str:
-    # Double check that the key fits into exactly 32 bytes
     try:
         pk_bytes = private_key_int.to_bytes(32, 'big')
     except OverflowError:
-        # Fallback safeguard in case an invalid number leaks through
         sanitized_key = private_key_int % SECP256K1_N
         pk_bytes = sanitized_key.to_bytes(32, 'big')
         
@@ -91,18 +89,13 @@ def recover_private_key(sig1, sig2, n=SECP256K1_N):
     z2, s2 = sig2['msg_hash'], sig2['s']
     if s1 == s2: return None, None
     try:
-        # Step 1: Calculate k with modular arithmetic wrap applied
         delta_z = (z1 - z2) % n
         delta_s_inv = pow((s1 - s2) % n, -1, n)
         k = (delta_z * delta_s_inv) % n
         
-        # Step 2: Calculate d and force a final positive modulo step
         r_inv = pow(r, -1, n)
         d = (((s1 * k) % n - z1) % n * r_inv) % n
         
-        # --- CRITICAL BIT LENGTH GUARD ---
-        # If the key requires more than 256 bits, it is a mathematical anomaly
-        # resulting from mixed signature sources. Skip it.
         if d == 0 or d.bit_length() > 256 or d >= n:
             return None, None
             
@@ -111,7 +104,7 @@ def recover_private_key(sig1, sig2, n=SECP256K1_N):
         return None, None
 
 # ==========================================
-# File Processing
+# Fixed File Processing Core
 # ==========================================
 
 def parse_btc_file(file_path):
@@ -126,29 +119,26 @@ def parse_btc_file(file_path):
             if not line or line.startswith('#') or line.startswith('//'): 
                 continue
             
+            # Remove helper tags and string artifacts cleanly
             cleaned = re.sub(r'(msg_hash|hash|z|r|s|k)\s*=\s*', '', line, flags=re.IGNORECASE)
             cleaned = cleaned.replace('0x', '').replace('0X', '')
+            
+            # Isolate all standard hex strings
             hex_parts = re.findall(r'[0-9a-fA-F]+', cleaned)
             
             if len(hex_parts) >= 3:
                 try:
+                    # Clean index translation
                     signatures.append({
                         'id': idx,
-                        'msg_hash': int(hex_parts, 0), # Fallback dynamic base conversion
-                        'r': int(hex_parts, 16),
-                        's': int(hex_parts, 16)
+                        'msg_hash': int(hex_parts[0], 16),
+                        'r': int(hex_parts[1], 16),
+                        's': int(hex_parts[2], 16)
                     })
-                except Exception:
-                    try:
-                        # Secondary attempt forcing hex base explicitly if dynamic base fails
-                        signatures.append({
-                            'id': idx,
-                            'msg_hash': int(hex_parts, 16),
-                            'r': int(hex_parts, 16),
-                            's': int(hex_parts, 16)
-                        })
-                    except Exception:
-                        pass
+                except Exception as e:
+                    print(f"[-] Skipping line {idx} due to conversion failure: {e}")
+            else:
+                print(f"[-] Skipping line {idx}: Found insufficient components ({len(hex_parts)} items).")
     return signatures
 
 # ==========================================
